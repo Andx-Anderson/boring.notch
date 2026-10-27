@@ -216,7 +216,11 @@ struct ContentView: View {
             anyDropDebounceTask?.cancel()
 
             if isTargeted {
-                if vm.notchState == .closed {
+                guard vm.notchState == .closed else { return }
+                // Same rule as DragDetector: open only once the drag has stayed here a moment.
+                anyDropDebounceTask = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(DragDetector.hoverDelay))
+                    guard !Task.isCancelled, vm.anyDropZoneTargeting, vm.notchState == .closed else { return }
                     coordinator.currentView = .shelf
                     doOpen()
                 }

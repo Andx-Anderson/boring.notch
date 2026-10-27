@@ -22,7 +22,8 @@ struct DynamicNotchApp: App {
 
     init() {
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+            // Off in this fork: upstream's updater would replace it with their build.
+            startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
 
         // Initialize the settings window controller with the updater controller
         SettingsWindowController.shared.setUpdaterController(updaterController)
@@ -194,10 +195,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let uuid = screen.displayUUID else { return }
         
         let screenFrame = screen.frame
-        let notchHeight = openNotchSize.height
-        let notchWidth = openNotchSize.width
-        
-        // Create notch region at the top-center of the screen where an open notch would occupy
+        // The closed notch plus a little slack, not the open notch: the open size reaches down
+        // over the browser tab strip, so dragging a link to a tab used to open the shelf.
+        let closedSize = getClosedNotchSize(screenUUID: uuid)
+        let notchHeight = closedSize.height + 8
+        let notchWidth = closedSize.width + 40
+
         let notchRegion = CGRect(
             x: screenFrame.midX - notchWidth / 2,
             y: screenFrame.maxY - notchHeight,
@@ -218,7 +221,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleDragEntersNotchRegion(onScreen screen: NSScreen) {
-        guard let uuid = screen.displayUUID else { return }
+        guard Defaults[.boringShelf], let uuid = screen.displayUUID else { return }
         
         if Defaults[.showOnAllDisplays], let viewModel = viewModels[uuid] {
             viewModel.open()

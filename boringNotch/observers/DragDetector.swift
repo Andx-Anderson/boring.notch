@@ -28,6 +28,11 @@ final class DragDetector {
     private var isDragging: Bool = false
     private var isContentDragging: Bool = false
     private var hasEnteredNotchRegion: Bool = false
+    private var pendingEnter: DispatchWorkItem?
+
+    /// How long a drag must stay over the notch before it opens. Passing over it on the way to a
+    /// browser tab or the menu bar is not a request to drop there.
+    static let hoverDelay: TimeInterval = 0.4
 
     private let notchRegion: CGRect
     private let dragPasteboard = NSPasteboard(name: .drag)
@@ -81,9 +86,15 @@ final class DragDetector {
                 let containsMouse = self.notchRegion.contains(mouseLocation)
                 if containsMouse && !self.hasEnteredNotchRegion {
                     self.hasEnteredNotchRegion = true
-                    self.onDragEntersNotchRegion?()
+                    let enter = DispatchWorkItem { [weak self] in
+                        guard let self = self, self.hasEnteredNotchRegion else { return }
+                        self.onDragEntersNotchRegion?()
+                    }
+                    self.pendingEnter = enter
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverDelay, execute: enter)
                 } else if !containsMouse && self.hasEnteredNotchRegion {
                     self.hasEnteredNotchRegion = false
+                    self.cancelPendingEnter()
                     self.onDragExitsNotchRegion?()
                 }
             }
@@ -96,8 +107,14 @@ final class DragDetector {
             self.isDragging = false
             self.isContentDragging = false
             self.hasEnteredNotchRegion = false
+            self.cancelPendingEnter()
             self.pasteboardChangeCount = -1
         }
+    }
+
+    private func cancelPendingEnter() {
+        pendingEnter?.cancel()
+        pendingEnter = nil
     }
 
     func stopMonitoring() {
@@ -112,6 +129,7 @@ final class DragDetector {
         isDragging = false
         isContentDragging = false
         hasEnteredNotchRegion = false
+        cancelPendingEnter()
     }
 
     deinit {
