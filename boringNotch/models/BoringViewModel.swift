@@ -36,6 +36,8 @@ class BoringViewModel: NSObject, ObservableObject {
 
     @Published var notchSize: CGSize = getClosedNotchSize()
     @Published var closedNotchSize: CGSize = getClosedNotchSize()
+    /// Width of the closed notch as drawn (music widens it). Set by ContentView, read by DragDetector.
+    var closedDrawnWidth: CGFloat = 0
     
     let webcamManager = WebcamManager.shared
     @Published var isCameraExpanded: Bool = false

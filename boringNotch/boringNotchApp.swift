@@ -195,11 +195,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let uuid = screen.displayUUID else { return }
         
         let screenFrame = screen.frame
-        // The closed notch plus a little slack, not the open notch: the open size reaches down
-        // over the browser tab strip, so dragging a link to a tab used to open the shelf.
+        // The hardware notch. DragDetector widens it to the notch as drawn (music makes it wider);
+        // the menu bar beside it, and the open-notch area over the browser tabs, never open the shelf.
         let closedSize = getClosedNotchSize(screenUUID: uuid)
-        let notchHeight = closedSize.height + 8
-        let notchWidth = closedSize.width + 40
+        let notchHeight = closedSize.height
+        let notchWidth = closedSize.width
 
         let notchRegion = CGRect(
             x: screenFrame.midX - notchWidth / 2,
@@ -209,6 +209,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         
         let detector = DragDetector(notchRegion: notchRegion)
+        detector.notchWidth = { [weak self] in
+            guard let self else { return closedSize.width }
+            let model = Defaults[.showOnAllDisplays] ? self.viewModels[uuid] : self.vm
+            let width = model?.closedDrawnWidth ?? 0
+            return width > 0 ? width : closedSize.width
+        }
         
         detector.onDragEntersNotchRegion = { [weak self] in
             Task { @MainActor in

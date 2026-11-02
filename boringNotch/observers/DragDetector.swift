@@ -18,6 +18,8 @@ final class DragDetector {
     var onDragEntersNotchRegion: VoidCallback?
     var onDragExitsNotchRegion: VoidCallback?
     var onDragMove: PositionCallback?
+    /// Width of the closed notch as currently drawn; falls back to the hardware notch.
+    var notchWidth: (() -> CGFloat)?
 
 
     private var mouseDownMonitor: Any?
@@ -29,10 +31,17 @@ final class DragDetector {
     private var isContentDragging: Bool = false
     private var hasEnteredNotchRegion: Bool = false
     private var pendingEnter: DispatchWorkItem?
+    /// Set once this drag has reached the menu bar near the notch; from then on it is kept below it.
+    private var holdingOff: Bool = false
 
     /// How long a drag must stay over the notch before it opens. Passing over it on the way to a
     /// browser tab or the menu bar is not a request to drop there.
-    static let hoverDelay: TimeInterval = 0.4
+    static let hoverDelay: TimeInterval = 0.3
+
+
+    /// Half the width of the area around the notch where drags are kept out of the menu bar -
+    /// about the open shelf's width, so menu bar items further out still take drops.
+    static let holdOffHalfWidth: CGFloat = openNotchSize.width / 2 + 20
 
     private let notchRegion: CGRect
     private let dragPasteboard = NSPasteboard(name: .drag)
@@ -63,6 +72,7 @@ final class DragDetector {
             self.isDragging = true
             self.isContentDragging = false
             self.hasEnteredNotchRegion = false
+            self.holdingOff = false
         }
 
         // Track drag movement and notch region intersection
@@ -79,24 +89,23 @@ final class DragDetector {
 
             // Only process position when content is being dragged
             if self.isContentDragging {
-                let mouseLocation = NSEvent.mouseLocation
-                self.onDragMove?(mouseLocation)
-                
-                // Track notch region entry/exit
-                let containsMouse = self.notchRegion.contains(mouseLocation)
-                if containsMouse && !self.hasEnteredNotchRegion {
+                var mouseLocation = NSEvent.mouseLocation
+                // Only the notch itself opens the shelf - the black pill as it is drawn right
+                // now, not the menu bar beside it. It opens at once and the drag is then kept out
+                // of the menu bar (see holdOff), since it is sitting in the menu bar strip already.
+                if !self.holdingOff, self.isOnNotch(mouseLocation) {
+                    self.holdingOff = true
                     self.hasEnteredNotchRegion = true
-                    let enter = DispatchWorkItem { [weak self] in
-                        guard let self = self, self.hasEnteredNotchRegion else { return }
-                        self.onDragEntersNotchRegion?()
-                    }
-                    self.pendingEnter = enter
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverDelay, execute: enter)
-                } else if !containsMouse && self.hasEnteredNotchRegion {
-                    self.hasEnteredNotchRegion = false
-                    self.cancelPendingEnter()
-                    self.onDragExitsNotchRegion?()
+                    self.onDragEntersNotchRegion?()
                 }
+                // Leaving the open shelf's area ends the hold: the shelf closes behind the drag and
+                // the tabs under the notch must be reachable again.
+                if self.holdingOff, !self.isInOpenNotchArea(mouseLocation) {
+                    self.holdingOff = false
+                    self.hasEnteredNotchRegion = false
+                }
+                if self.holdingOff, let held = self.holdOff(mouseLocation) { mouseLocation = held }
+                self.onDragMove?(mouseLocation)
             }
         }
 
@@ -107,10 +116,68 @@ final class DragDetector {
             self.isDragging = false
             self.isContentDragging = false
             self.hasEnteredNotchRegion = false
+            self.holdingOff = false
             self.cancelPendingEnter()
             self.pasteboardChangeCount = -1
         }
     }
+
+    /// macOS 27 opens Mission Control when a file drag lingers anywhere in the menu bar strip -
+    /// tested: held at 3, 12 and 25 pt from the top it opened, at 45 pt it did not, with or without
+    /// this app running. The Dock's top-drag setting only covers window drags and
+    /// `mcx-expose-disabled` is ignored, so there is no switch. Instead, once a drag has gone for the
+    /// notch it is held just under the menu bar, which is where the shelf's drop area is anyway.
+    /// Only after that: holding every drag near the notch made browser tabs under it unreachable.
+    private func holdOff(_ point: CGPoint) -> CGPoint? {
+        guard let screen = notchScreen(containing: point),
+              abs(point.x - notchRegion.midX) <= Self.holdOffHalfWidth,
+              let primaryHeight = NSScreen.screens.first?.frame.height
+        else { return nil }
+        let limit = Self.holdOffLine(on: screen)
+        guard point.y > limit else { return nil }
+        let held = CGPoint(x: point.x, y: limit)
+        // Cocoa's origin is bottom-left of the primary screen; Quartz's is top-left.
+        CGWarpMouseCursorPosition(CGPoint(x: held.x, y: primaryHeight - held.y))
+        CGAssociateMouseAndMouseCursorPosition(1)
+        return held
+    }
+
+    /// On the black pill: its current drawn width (wider while music plays), top strip only.
+    private func isOnNotch(_ point: CGPoint) -> Bool {
+        guard let screen = notchScreen(containing: point) else { return false }
+        let width = notchWidth?() ?? notchRegion.width
+        let height = max(Self.menuBarHeight(on: screen), notchRegion.height)
+        return abs(point.x - notchRegion.midX) <= width / 2
+            && point.y > screen.frame.maxY - height
+    }
+
+    /// Roughly where the open shelf is drawn: open-notch size plus a little slack.
+    private func isInOpenNotchArea(_ point: CGPoint) -> Bool {
+        guard let screen = notchScreen(containing: point) else { return false }
+        return abs(point.x - notchRegion.midX) <= Self.holdOffHalfWidth
+            && point.y >= screen.frame.maxY - (openNotchSize.height + 20)
+    }
+
+    /// The screen under `point`, if it is the one this detector's notch is on.
+    private func notchScreen(containing point: CGPoint) -> NSScreen? {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }),
+              screen.frame.contains(CGPoint(x: notchRegion.midX, y: notchRegion.midY)) else { return nil }
+        return screen
+    }
+
+    static func menuBarHeight(on screen: NSScreen) -> CGFloat {
+        max(screen.safeAreaInsets.top, screen.frame.maxY - screen.visibleFrame.maxY, 24)
+    }
+
+    /// Highest y (Cocoa) a content drag may reach: just below the menu bar.
+    static func holdOffLine(on screen: NSScreen) -> CGFloat {
+        screen.frame.maxY - menuBarHeight(on: screen) - Self.holdOffClearance
+    }
+
+    /// Gap kept under the menu bar. The cursor is pulled back only after an event has moved it,
+    /// so one push up must not be able to reach the menu bar from the line: a 3 pt gap still
+    /// opened Mission Control when pushing 8 pt per event, 16 pt failed at 25 pt pushes.
+    static let holdOffClearance: CGFloat = 30
 
     private func cancelPendingEnter() {
         pendingEnter?.cancel()
@@ -129,6 +196,7 @@ final class DragDetector {
         isDragging = false
         isContentDragging = false
         hasEnteredNotchRegion = false
+        holdingOff = false
         cancelPendingEnter()
     }
 

@@ -212,6 +212,9 @@ struct ContentView: View {
         .background(dragDetector)
         .preferredColorScheme(.dark)
         .environmentObject(vm)
+        .onChange(of: computedChinWidth, initial: true) { _, width in
+            vm.closedDrawnWidth = width
+        }
         .onChange(of: vm.anyDropZoneTargeting) { _, isTargeted in
             anyDropDebounceTask?.cancel()
 
@@ -220,7 +223,9 @@ struct ContentView: View {
                 // Same rule as DragDetector: open only once the drag has stayed here a moment.
                 anyDropDebounceTask = Task { @MainActor in
                     try? await Task.sleep(for: .seconds(DragDetector.hoverDelay))
-                    guard !Task.isCancelled, vm.anyDropZoneTargeting, vm.notchState == .closed else { return }
+                    // Only the closed notch's own target, not the window around it - that spans the menu
+                    // bar beside the notch, which must not open the shelf.
+                    guard !Task.isCancelled, vm.dragDetectorTargeting, vm.notchState == .closed else { return }
                     coordinator.currentView = .shelf
                     doOpen()
                 }

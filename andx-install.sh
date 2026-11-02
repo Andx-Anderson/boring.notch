@@ -33,8 +33,11 @@ sign --entitlements BoringNotchXPCHelper/BoringNotchXPCHelper.entitlements \
 sign --entitlements "$ENT" "$APP"
 codesign --verify --deep --strict "$APP"
 
-pkill -x boringNotch 2>/dev/null || true
-sleep 1
+# Quit by bundle id: pkill left upstream's copy running, and `open` then did nothing.
+for id in theboringteam.boringnotch "$BUNDLE_ID"; do
+  osascript -e "tell application id \"$id\" to quit" 2>/dev/null || true
+done
+sleep 2
 # Keep whatever was installed (upstream's build the first time) instead of overwriting it.
 if [ -d /Applications/boringNotch.app ]; then
   mv /Applications/boringNotch.app "build/previous-$(date +%Y%m%d-%H%M%S).app"
